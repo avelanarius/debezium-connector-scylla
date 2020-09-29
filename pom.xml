@@ -49,6 +49,11 @@
             <version>1.2.4.Final</version>
         </dependency>
         <dependency>
+            <groupId>io.debezium</groupId>
+            <artifactId>debezium-embedded</artifactId>
+            <version>1.2.4.Final</version> <!-- workInProgress - introduce a single variable with version -->
+        </dependency>
+        <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>connect-api</artifactId>
             <version>2.6.0</version>

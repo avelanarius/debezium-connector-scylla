@@ -8,15 +8,21 @@ import com.datastax.driver.core.utils.Bytes;
 import com.datastax.driver.core.utils.UUIDs;
 import com.scylladb.cdc.Generation;
 import com.scylladb.cdc.debezium.connector.tmpclient.StreamIdsProvider;
+import com.scylladb.cdc.driver.Reader;
+import com.scylladb.cdc.master.GenerationsFetcher;
 import io.debezium.config.Configuration;
+import io.debezium.embedded.EmbeddedEngine;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.source.SourceConnector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public class ScyllaConnector extends SourceConnector {
@@ -40,12 +46,12 @@ public class ScyllaConnector extends SourceConnector {
             @Override
             public void run() {
                 while (true) {
-                    ScyllaConnector.this.context.requestTaskReconfiguration();
                     try {
                         Thread.sleep(20000);
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
+                    ScyllaConnector.this.context.requestTaskReconfiguration();
                 }
             }
         });
@@ -56,6 +62,8 @@ public class ScyllaConnector extends SourceConnector {
     public Class<? extends Task> taskClass() {
         return ScyllaConnectorTask.class;
     }
+
+    private Date lastDate = new Date(0);
 
     @Override
     public List<Map<String, String>> taskConfigs(int maxTasks) {
@@ -68,54 +76,55 @@ public class ScyllaConnector extends SourceConnector {
         final ScyllaConnectorConfig connectorConfig = new ScyllaConnectorConfig(config);
         SourceInfo sourceInfo = new SourceInfo(connectorConfig);
 
-        // 1. Get all generations
-        Collection<Generation> generations = StreamIdsProvider.listAllGenerations();
+        Reader<Date> tReader = Reader.createGenerationsTimestampsReader(session);
+        Reader<Set<ByteBuffer>> gsReader = Reader.createGenerationStreamsReader(session);
+        GenerationsFetcher fetcher = new GenerationsFetcher(tReader, gsReader);
 
-        Date safetyNow = Date.from(Instant.now().minusSeconds(30));
+        Generation currentGen = null;
+        try {
+            currentGen = fetcher.fetchNext(lastDate, new AtomicBoolean(true)).get();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            e.printStackTrace();
+        }
 
-        // 2. Find the generation we should be currently working on
-        Generation chosenGeneration = null;
-        for (Generation generation : generations) { // Important to iterate from oldest to newest
+        if (currentGen == null) {
+            return Collections.emptyList();
+        }
+
+        if (!currentGen.metadata.endTimestamp.isPresent()) {
+            // Current generation is still open, work on it
+        } else {
+            // If generation is closed, check if all
+            // workers read it at least up to (generationEnd + SAFETY_WINDOW).
             Map<Long, List<String>> splitByVNodes = StreamIdsProvider.splitStreamIdsByVNodesMap(
-                    generation.streamIds.stream().map(Bytes::toHexString).collect(Collectors.toList()));
+                    currentGen.streamIds.stream().map(q -> "0x" + q.toString()).collect(Collectors.toList()));
+            Date generationEndWithSafety = Date.from(currentGen.metadata.endTimestamp.get().toInstant().plusSeconds(30));
 
-            if (generation.metadata.startTimestamp.after(safetyNow)) {
-                break;
-            }
-
-            boolean workToDo = false;
-
-            // Find out if there is still work to do on this generation
+            boolean allWorkersFinished = true;
             for (Map.Entry<Long, List<String>> entry : splitByVNodes.entrySet()) {
-                Map<String, Object> readOffset = context().offsetStorageReader().offset(sourceInfo.partition(entry.getKey()));
+                Map<String, Object> readOffset = context().offsetStorageReader().offset(sourceInfo.partition(entry.getKey(), currentGen.metadata.startTimestamp));
                 UUID lastOffsetUUID = UUIDs.startOf(0);
                 if (readOffset != null) {
                     lastOffsetUUID = UUID.fromString((String) readOffset.get(SourceInfo.OFFSET));
                 }
 
-                // workInProgress
-                for (String streamId : entry.getValue()) {
-                    String queryString = "SELECT * FROM ks.t_scylla_cdc_log WHERE \"cdc$stream_id\" = " + streamId
-                            + " AND \"cdc$time\" > " + lastOffsetUUID.toString();
-                    ResultSet rs = session.execute(queryString);
-                    if (!rs.isExhausted()) {
-                        // There is still work to do on this generation
-                        workToDo = true;
-                    }
+                Date lastOffsetDate = new Date(UUIDs.unixTimestamp(lastOffsetUUID));
+                if (lastOffsetDate.before(generationEndWithSafety)) {
+                    allWorkersFinished = false;
+                    logger.warn("Worker not finished in: " + currentGen.metadata.startTimestamp + " " + lastOffsetDate + " < " + generationEndWithSafety);
+                    break;
                 }
             }
 
-            if (workToDo) {
-                chosenGeneration = generation;
-                break;
-            }
-        }
-
-        if (chosenGeneration == null) {
-            // In all generations work is done, so choose the latest generation (minding the safety window)
-            List<Generation> filteredGenerations = generations.stream().filter(g -> g.metadata.startTimestamp.before(safetyNow)).collect(Collectors.toList());
-            if (!filteredGenerations.isEmpty()) {
-                chosenGeneration = filteredGenerations.get(filteredGenerations.size() - 1);
+            if (allWorkersFinished) {
+                // All workers finished (past generationEnd + SAFETY_WINDOW).
+                // Move to next gen!
+                lastDate = currentGen.metadata.startTimestamp;
+                return taskConfigs(maxTasks);
+            } else {
+                // Still work on current generation
             }
         }
 
@@ -124,16 +133,15 @@ public class ScyllaConnector extends SourceConnector {
 
         List<Map<String, String>> tasks = new ArrayList<>();
 
-        if (chosenGeneration != null) {
-            Collection<List<String>> streamIdsList = StreamIdsProvider.splitStreamIdsByVNodes(chosenGeneration.streamIds.stream().map(Bytes::toHexString).collect(Collectors.toList()));
-            Collection<List<String>> chunks = StreamIdsProvider.reduceCount(streamIdsList, 5);
+        Collection<List<String>> streamIdsList = StreamIdsProvider.splitStreamIdsByVNodes(currentGen.streamIds.stream().map(q -> "0x" + q.toString()).collect(Collectors.toList()));
+        Collection<List<String>> chunks = StreamIdsProvider.reduceCount(streamIdsList, 5);
 
-            for (List<String> chunk : chunks) {
-                Map<String, String> taskConfig = config.edit()
-                        .with(ScyllaConnectorConfig.STREAM_IDS, String.join(",", chunk))
-                        .build().asMap();
-                tasks.add(taskConfig);
-            }
+        for (List<String> chunk : chunks) {
+            Map<String, String> taskConfig = config.edit()
+                    .with(ScyllaConnectorConfig.STREAM_IDS, String.join(",", chunk))
+                    .with(ScyllaConnectorConfig.GENERATION_START, Long.toString(currentGen.metadata.startTimestamp.getTime()))
+                    .build().asMap();
+            tasks.add(taskConfig);
         }
 
         System.out.println("Will queue up: " + tasks.size());

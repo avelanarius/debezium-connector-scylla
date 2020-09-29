@@ -8,6 +8,7 @@ import org.apache.kafka.connect.data.Struct;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import java.time.Instant;
+import java.util.Date;
 import java.util.Map;
 import java.util.UUID;
 
@@ -15,30 +16,32 @@ public class VNodeOffsetContext implements OffsetContext {
 
     private final ScyllaOffsetContext offsetContext;
     private final long vnodeId;
+    private final Date generationStart;
     private final SourceInfo sourceInfo;
 
-    public VNodeOffsetContext(ScyllaOffsetContext offsetContext, long vnodeId, SourceInfo sourceInfo) {
+    public VNodeOffsetContext(ScyllaOffsetContext offsetContext, long vnodeId, Date generationStart, SourceInfo sourceInfo) {
         this.offsetContext = offsetContext;
         this.vnodeId = vnodeId;
+        this.generationStart = generationStart;
         this.sourceInfo = sourceInfo;
     }
 
     @Override
     public Map<String, ?> getPartition() {
-        return sourceInfo.partition(vnodeId);
+        return sourceInfo.partition(vnodeId, generationStart);
     }
 
     @Override
     public Map<String, ?> getOffset() {
-        return sourceInfo.offset(vnodeId);
+        return sourceInfo.offset(vnodeId, generationStart);
     }
 
     public UUID lastOffsetUUID() {
-        return sourceInfo.lastOffsetUUID(vnodeId);
+        return sourceInfo.lastOffsetUUID(vnodeId, generationStart);
     }
 
     public void dataChangeEvent(UUID time) {
-        sourceInfo.dataChangeEvent(vnodeId, time);
+        sourceInfo.dataChangeEvent(vnodeId, generationStart, time);
     }
 
     @Override

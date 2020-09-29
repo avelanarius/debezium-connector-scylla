@@ -31,10 +31,10 @@ public class ScyllaChangeRecordEmitter extends AbstractChangeRecordEmitter<Scyll
     protected void emitCreateRecord(Receiver receiver, ScyllaCollectionSchema scyllaCollectionSchema) throws InterruptedException {
         Struct keyStruct = new Struct(scyllaCollectionSchema.keySchema())
                 .put("field1", "workInProgress");
-        Struct valueStruct = new Struct(scyllaCollectionSchema.valueSchema())
-                .put("field1", "workInProgress streamowe: " + cdcRow.toString());
+        String workInProgress = "workInProgress streamowe: " + cdcRow.toString();
+        Struct envelope = scyllaCollectionSchema.getEnvelopeSchema().create(workInProgress, getOffset().getSourceInfo(), getClock().currentTimeAsInstant());
 
-        receiver.changeRecord(scyllaCollectionSchema, getOperation(), keyStruct, valueStruct, getOffset(), null);
+        receiver.changeRecord(scyllaCollectionSchema, getOperation(), keyStruct, envelope, getOffset(), null);
     }
 
     @Override

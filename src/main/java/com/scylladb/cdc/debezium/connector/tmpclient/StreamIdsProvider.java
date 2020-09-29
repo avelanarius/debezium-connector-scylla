@@ -11,6 +11,7 @@ import com.scylladb.cdc.master.GenerationsFetcher;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public class StreamIdsProvider {
@@ -82,18 +83,16 @@ public class StreamIdsProvider {
 
         Generation g = null;
         try {
-            g = fetcher.fetchNext(new Date(0), false).get();
+            g = fetcher.fetchNext(new Date(0), new AtomicBoolean(false)).get();
         } catch (InterruptedException | ExecutionException e) {
             e.printStackTrace();
         }
 
         assert g != null;
-        Set<ByteBuffer> streamIds = g.streamIds;
-
         session.close();
         cluster.close();
 
-        Collection<List<String>> streamIdsList = splitStreamIdsByVNodes(streamIds.stream().map(Bytes::toHexString).collect(Collectors.toList()));
+        Collection<List<String>> streamIdsList = splitStreamIdsByVNodes(g.streamIds.stream().map(q -> "0x" + q.toString()).collect(Collectors.toList()));
 
         return reduceCount(streamIdsList, 5);
     }
@@ -111,7 +110,7 @@ public class StreamIdsProvider {
         Generation g = null;
         try {
             do {
-                g = fetcher.fetchNext(currentDate, true).get();
+                g = fetcher.fetchNext(currentDate, new AtomicBoolean(true)).get();
                 if (g != null) {
                     currentDate = g.metadata.startTimestamp;
                     generations.add(g);

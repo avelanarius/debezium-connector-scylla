@@ -5,6 +5,7 @@ import io.debezium.config.ConfigDefinition;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.connector.SourceInfoStructMaker;
+import io.debezium.heartbeat.Heartbeat;
 import org.apache.kafka.common.config.ConfigDef;
 
 public class ScyllaConnectorConfig extends CommonConnectorConfig {
@@ -13,6 +14,11 @@ public class ScyllaConnectorConfig extends CommonConnectorConfig {
             .withDisplayName("Stream IDs")
             .withType(ConfigDef.Type.LIST)
             .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.HIGH);
+    public static final Field GENERATION_START = Field.create("scylla.generation.start")
+            .withDisplayName("Generation start")
+            .withType(ConfigDef.Type.LONG)
+            .withWidth(ConfigDef.Width.LONG) // workInProgress what is width?
             .withImportance(ConfigDef.Importance.HIGH);
     // workInProgress .withValidation(MongoDbConnectorConfig::validateHosts)
     // workInProgress .withDescription("The hostname and port pairs (in the form 'host' or 'host:port') "
@@ -27,7 +33,7 @@ public class ScyllaConnectorConfig extends CommonConnectorConfig {
     public static Field.Set ALL_FIELDS = Field.setOf(CONFIG_DEFINITION.all());
 
     protected ScyllaConnectorConfig(Configuration config) {
-        super(config, "workInProgress logical name", 0);
+        super(config, "workInProgressLogicalName", 0);
     }
 
     public static ConfigDef configDef() {

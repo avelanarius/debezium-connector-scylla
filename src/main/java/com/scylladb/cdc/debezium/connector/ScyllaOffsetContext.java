@@ -8,6 +8,7 @@ import org.apache.kafka.connect.data.Struct;
 
 import java.time.Instant;
 import java.util.Collections;
+import java.util.Date;
 import java.util.Map;
 
 public class ScyllaOffsetContext implements OffsetContext {
@@ -20,8 +21,8 @@ public class ScyllaOffsetContext implements OffsetContext {
         this.transactionContext = transactionContext;
     }
 
-    public VNodeOffsetContext vnodeOffsetContext(long vnodeId) {
-        return new VNodeOffsetContext(this, vnodeId, sourceInfo);
+    public VNodeOffsetContext vnodeOffsetContext(long vnodeId, Date generationStart) {
+        return new VNodeOffsetContext(this, vnodeId, generationStart, sourceInfo);
     }
 
     @Override
@@ -38,12 +39,12 @@ public class ScyllaOffsetContext implements OffsetContext {
 
     @Override
     public Schema getSourceInfoSchema() {
-        throw new UnsupportedOperationException();
+        return sourceInfo.schema();
     }
 
     @Override
     public Struct getSourceInfo() {
-        throw new UnsupportedOperationException();
+        return sourceInfo.struct();
     }
 
     @Override

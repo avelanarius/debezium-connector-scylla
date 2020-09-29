@@ -13,6 +13,8 @@ public class ScyllaSourceInfoStructMaker extends AbstractSourceInfoStructMaker<S
         super(connector, version, connectorConfig);
         schema = commonSchemaBuilder()
                 .name("com.scylladb.cdc.debezium.connector")
+                .field(SourceInfo.KEYSPACE_NAME, Schema.STRING_SCHEMA)
+                .field(SourceInfo.TABLE_NAME, Schema.STRING_SCHEMA)
                 .build();
     }
 
@@ -23,6 +25,8 @@ public class ScyllaSourceInfoStructMaker extends AbstractSourceInfoStructMaker<S
 
     @Override
     public Struct struct(SourceInfo sourceInfo) {
-        return super.commonStruct(sourceInfo);
+        return super.commonStruct(sourceInfo)
+                .put(SourceInfo.KEYSPACE_NAME, sourceInfo.keyspaceName())
+                .put(SourceInfo.TABLE_NAME, sourceInfo.tableName());
     }
 }

@@ -15,6 +15,7 @@ import io.debezium.pipeline.txmetadata.TransactionContext;
 import io.debezium.schema.TopicSelector;
 import io.debezium.util.Clock;
 import io.debezium.util.SchemaNameAdjuster;
+import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +42,8 @@ public class ScyllaConnectorTask extends BaseSourceTask {
         final TopicSelector<CollectionId> topicSelector = TopicSelector.defaultSelector(connectorConfig,
                 (id, prefix, delimiter) -> "quickstart-events");
 
-        this.schema = new ScyllaSchema();
+        final Schema structSchema = connectorConfig.getSourceInfoStructMaker().schema();
+        this.schema = new ScyllaSchema(structSchema);
 
         this.queue = new ChangeEventQueue.Builder<DataChangeEvent>()
                 .pollInterval(connectorConfig.getPollInterval())
@@ -50,9 +52,11 @@ public class ScyllaConnectorTask extends BaseSourceTask {
                 .loggingContextSupplier(() -> taskContext.configureLoggingContext(CONTEXT_NAME))
                 .build();
 
+
+        Date generationStart = getGenerationStart(configuration);
         String[] streamIds = getStreamIds(configuration);
 
-        this.taskContext = new ScyllaTaskContext(configuration, streamIds);
+        this.taskContext = new ScyllaTaskContext(configuration, streamIds, generationStart);
 
         final ScyllaEventMetadataProvider metadataProvider = new ScyllaEventMetadataProvider();
 
@@ -67,7 +71,7 @@ public class ScyllaConnectorTask extends BaseSourceTask {
                 SchemaNameAdjuster.create(logger)
         );
 
-        final ScyllaOffsetContext previousOffsets = getPreviousOffsets(connectorConfig, streamIds);
+        final ScyllaOffsetContext previousOffsets = getPreviousOffsets(connectorConfig, streamIds, generationStart);
 
         this.errorHandler = new ScyllaErrorHandler("workInProgress", queue);
 
@@ -88,20 +92,25 @@ public class ScyllaConnectorTask extends BaseSourceTask {
         return coordinator;
     }
 
+    private Date getGenerationStart(Configuration configuration) {
+        long timestamp = Long.parseLong(configuration.getString(ScyllaConnectorConfig.GENERATION_START));
+        return new Date(timestamp);
+    }
+
     private String[] getStreamIds(Configuration config) {
         String streamIds = config.getString(ScyllaConnectorConfig.STREAM_IDS);
         return streamIds.split(",");
     }
 
-    private ScyllaOffsetContext getPreviousOffsets(ScyllaConnectorConfig connectorConfig, String[] streamIds) {
+    private ScyllaOffsetContext getPreviousOffsets(ScyllaConnectorConfig connectorConfig, String[] streamIds, Date generationStart) {
         SourceInfo sourceInfo = new SourceInfo(connectorConfig);
         Collection<Long> vNodes = StreamIdsProvider.splitStreamIdsByVNodesMap(Arrays.asList(streamIds)).keySet();
         for (long vnode : vNodes) {
-            Map<String, String> partition = sourceInfo.partition(vnode);
+            Map<String, String> partition = sourceInfo.partition(vnode, generationStart);
             Map<String, Object> offset = context.offsetStorageReader().offset(partition);
             if (offset != null) {
                 UUID lastOffsetUUID = UUID.fromString((String) offset.get(SourceInfo.OFFSET));
-                sourceInfo.loadLastOffsetUUID(vnode, lastOffsetUUID);
+                sourceInfo.loadLastOffsetUUID(vnode, generationStart, lastOffsetUUID);
             }
         }
         return new ScyllaOffsetContext(sourceInfo, new TransactionContext());

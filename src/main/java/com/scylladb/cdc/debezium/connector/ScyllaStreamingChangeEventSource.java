@@ -8,8 +8,14 @@ import com.datastax.driver.core.utils.UUIDs;
 import com.scylladb.cdc.debezium.connector.tmpclient.StreamIdsProvider;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.source.spi.StreamingChangeEventSource;
+import io.debezium.pipeline.spi.OffsetContext;
+import io.debezium.pipeline.txmetadata.TransactionContext;
+import io.debezium.schema.DataCollectionId;
 import io.debezium.util.Clock;
+import io.debezium.util.Collect;
 import io.debezium.util.Metronome;
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.Struct;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -48,7 +54,7 @@ public class ScyllaStreamingChangeEventSource implements StreamingChangeEventSou
             Map<Long, List<String>> streamsByVNodes = StreamIdsProvider.splitStreamIdsByVNodesMap(Arrays.asList(taskContext.streamIds()));
 
             for (Map.Entry<Long, List<String>> entry : streamsByVNodes.entrySet()) {
-                VNodeOffsetContext vNodeOffsetContext = offsetContext.vnodeOffsetContext(entry.getKey());
+                VNodeOffsetContext vNodeOffsetContext = offsetContext.vnodeOffsetContext(entry.getKey(), taskContext.generationStart());
                 UUID lastOffset = vNodeOffsetContext.lastOffsetUUID();
                 Date windowEndDate = Date.from(Instant.now().minusSeconds(10));
                 UUID windowEnd = UUIDs.endOf(windowEndDate.getTime());
@@ -68,6 +74,10 @@ public class ScyllaStreamingChangeEventSource implements StreamingChangeEventSou
                                 new ScyllaChangeRecordEmitter(r, vNodeOffsetContext, clock));
                     }
                 }
+
+                // Move window
+                vNodeOffsetContext.dataChangeEvent(windowEnd);
+                dispatcher.alwaysDispatchHeartbeatEvent(vNodeOffsetContext);
             }
 
             session.close();
